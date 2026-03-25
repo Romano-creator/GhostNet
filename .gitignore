@@ -1,0 +1,84 @@
+# ── Virtualenv ────────────────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Binaires téléchargés par setup.py ─────────────────────────────────────────
+# Ces dossiers sont générés par setup.py — ne pas versionner les .exe
+tor/tor.exe
+tor/lyrebird.exe
+tor/obfs4proxy.exe
+tor/*.dll
+tor/*.meek-client
+
+privoxy/privoxy.exe
+privoxy/*.dll
+
+tools/
+tools/7za.exe
+
+# ── Données runtime Tor ───────────────────────────────────────────────────────
+# Contient le cookie d'auth, les circuits, les clés — données sensibles
+data/tor_data/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+data/logs/
+*.log
+
+# ── Config générée (chemins absolus spécifiques à la machine) ─────────────────
+# torrc et config.txt sont régénérés par setup.py ou corrigés au démarrage
+tor/torrc
+privoxy/config.txt
+
+# ── Cache Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ── Archives de téléchargement temporaires ────────────────────────────────────
+*.tar.gz
+*.zip
+*.exe.download
+
+# ── Profils Chrome temporaires ────────────────────────────────────────────────
+# Créés par /chrome/launch dans backend_v2.py
+chrome_tor_*/
+
+# ── Éditeurs et OS ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Fichier de marquage setup ─────────────────────────────────────────────────
+bool
+
+privoxy/doc/
+
+privoxy/templates/
+
+privoxy/AUTHORS.txt
+
+privoxy/LICENSE.txt
+
+privoxy/README.txt
+
+privoxy/default.action
+
+privoxy/default.filter
+
+privoxy/match-all.action
+
+privoxy/trust.txt
+
+privoxy/user.action
+
+privoxy/user.filter
+
+tor/conjure-client.exe
+
+tor/tor-gencert.exe

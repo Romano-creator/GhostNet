@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GhostNet — VPN Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:    #080c10;
+    --bg2:   #0d1117;
+    --bg3:   #111820;
+    --cyan:  #00ffe7;
+    --cyan2: #00c4b4;
+    --pink:  #ff2d78;
+    --amber: #ffb300;
+    --green: #39ff6a;
+    --red:   #ff3b3b;
+    --text:  #c8d8e8;
+    --text2: #6a8099;
+    --border:  rgba(0,255,231,.15);
+    --border2: rgba(0,255,231,.08);
+    --glow:      0 0 12px rgba(0,255,231,.3);
+    --glow-pink: 0 0 12px rgba(255,45,120,.4);
+    --mono: 'Share Tech Mono', monospace;
+    --main: 'Rajdhani', sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:var(--main);min-height:100vh;overflow-x:hidden;}
+  body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,231,.015) 2px,rgba(0,255,231,.015) 4px);pointer-events:none;z-index:0;}
+  .wrap{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:2rem 1.5rem;}
+
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:2.5rem;padding-bottom:1rem;border-bottom:1px solid var(--border);}
+  .logo{display:flex;align-items:center;gap:14px;}
+  .logo-icon{width:42px;height:42px;border:1.5px solid var(--cyan);border-radius:8px;display:flex;align-items:center;justify-content:center;box-shadow:var(--glow);font-family:var(--mono);color:var(--cyan);font-size:18px;}
+  .logo-text h1{font-size:24px;font-weight:700;letter-spacing:4px;color:var(--cyan);text-shadow:0 0 10px rgba(0,255,231,.5);text-transform:uppercase;}
+  .logo-text p{font-family:var(--mono);font-size:11px;color:var(--text2);letter-spacing:2px;}
+  .header-right{text-align:right;font-family:var(--mono);}
+  #clock{color:var(--cyan);font-size:20px;display:block;}
+  .backend-badge{display:inline-flex;align-items:center;gap:6px;margin-top:4px;font-size:10px;letter-spacing:1px;color:var(--text2);}
+  .backend-dot{width:7px;height:7px;border-radius:50%;background:var(--red);}
+  .backend-dot.alive{background:var(--green);box-shadow:0 0 5px var(--green);}
+
+  .status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem;}
+  .stat-card{background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:1.2rem 1.4rem;position:relative;overflow:hidden;transition:border-color .3s;}
+  .stat-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--cyan);opacity:.5;}
+  .stat-card.pink::before{background:var(--pink);}
+  .stat-card.amber::before{background:var(--amber);}
+  .stat-card.green::before{background:var(--green);}
+  .stat-card:hover{border-color:rgba(0,255,231,.3);}
+  .stat-label{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text2);text-transform:uppercase;margin-bottom:10px;}
+  .stat-value{font-size:22px;font-weight:700;letter-spacing:1px;}
+  .stat-value.c-cyan{color:var(--cyan);text-shadow:0 0 8px rgba(0,255,231,.4);}
+  .stat-value.c-pink{color:var(--pink);}
+  .stat-value.c-green{color:var(--green);text-shadow:0 0 8px rgba(57,255,106,.4);}
+  .stat-value.c-amber{color:var(--amber);}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle;}
+  .dot.on{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite;}
+  .dot.off{background:var(--red);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+  .main-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem;}
+  @media(max-width:700px){.main-grid{grid-template-columns:1fr;}}
+  .panel{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:1.4rem;position:relative;}
+  .panel-title{font-family:var(--mono);font-size:11px;letter-spacing:3px;color:var(--cyan2);text-transform:uppercase;margin-bottom:1.2rem;padding-bottom:.7rem;border-bottom:1px solid var(--border2);}
+
+  .control-row{display:flex;align-items:center;justify-content:space-between;padding:.7rem 0;border-bottom:1px solid var(--border2);}
+  .control-row:last-of-type{border-bottom:none;}
+  .control-label{font-size:15px;font-weight:600;letter-spacing:1px;}
+  .control-sub{font-family:var(--mono);font-size:10px;color:var(--text2);margin-top:2px;}
+  .toggle{position:relative;width:52px;height:26px;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;inset:0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);border-radius:26px;cursor:pointer;transition:all .3s;}
+  .slider::before{content:'';position:absolute;left:4px;top:4px;width:16px;height:16px;border-radius:50%;background:var(--text2);transition:all .3s;}
+  .toggle input:checked+.slider{background:rgba(0,255,231,.15);border-color:var(--cyan);box-shadow:0 0 10px rgba(0,255,231,.3);}
+  .toggle input:checked+.slider::before{transform:translateX(26px);background:var(--cyan);}
+  .toggle input:disabled+.slider{opacity:.4;cursor:not-allowed;}
+
+  .circuit-nodes{display:flex;align-items:center;margin-top:.5rem;}
+  .c-node{background:var(--bg3);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--text2);flex:1;text-align:center;}
+  .c-node.active{border-color:var(--cyan);color:var(--cyan);background:rgba(0,255,231,.05);}
+  .c-arrow{width:20px;text-align:center;color:var(--border);font-size:14px;flex-shrink:0;}
+  .uptime-bar{height:4px;background:var(--border2);border-radius:2px;overflow:hidden;margin-top:8px;}
+  .uptime-fill{height:100%;background:linear-gradient(90deg,var(--cyan2),var(--cyan));border-radius:2px;transition:width 1s linear;}
+  .uptime-meta{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text2);margin-top:4px;}
+
+  .ip-block{background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:1rem 1.2rem;margin-bottom:.8rem;display:flex;align-items:center;justify-content:space-between;}
+  .ip-label{font-family:var(--mono);font-size:10px;color:var(--text2);letter-spacing:2px;margin-bottom:4px;}
+  .ip-addr{font-family:var(--mono);font-size:18px;letter-spacing:2px;}
+  .ip-addr.real{color:var(--red);}
+  .ip-addr.tor{color:var(--green);text-shadow:0 0 8px rgba(57,255,106,.3);}
+  .ip-flag{font-size:11px;font-family:var(--mono);color:var(--text2);margin-top:2px;}
+  .refresh-btn{background:none;border:1px solid var(--border);border-radius:5px;color:var(--text2);font-family:var(--mono);font-size:11px;padding:6px 12px;cursor:pointer;letter-spacing:1px;transition:all .2s;}
+  .refresh-btn:hover{border-color:var(--cyan);color:var(--cyan);}
+  .refresh-btn:disabled{opacity:.3;cursor:not-allowed;}
+
+  .transport-grid{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;}
+  .transport-btn{background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:.8rem;cursor:pointer;text-align:left;transition:all .2s;color:var(--text);font-family:var(--main);}
+  .transport-btn:hover{border-color:rgba(0,255,231,.3);background:rgba(0,255,231,.04);}
+  .transport-btn.active{border-color:var(--cyan);background:rgba(0,255,231,.07);box-shadow:var(--glow);}
+  .tb-name{font-size:15px;font-weight:700;letter-spacing:1px;color:var(--cyan);display:block;margin-bottom:3px;}
+  .transport-btn.active .tb-name{text-shadow:0 0 8px rgba(0,255,231,.6);}
+  .tb-desc{font-family:var(--mono);font-size:10px;color:var(--text2);line-height:1.4;}
+  .tb-badge{display:inline-block;font-size:9px;font-family:var(--mono);padding:1px 6px;border-radius:3px;margin-top:4px;background:rgba(0,255,231,.1);color:var(--cyan2);letter-spacing:1px;}
+  .tb-badge.strong{background:rgba(57,255,106,.1);color:var(--green);}
+  #pt-instructions{font-family:var(--mono);font-size:11px;color:var(--text2);line-height:1.7;margin-top:8px;padding-top:.8rem;border-top:1px solid var(--border2);}
+
+  .log-panel{grid-column:1 / -1;}
+  .terminal{background:var(--bg);border:1px solid var(--border2);border-radius:6px;padding:.8rem 1rem;font-family:var(--mono);font-size:12px;height:150px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+  .log-line{line-height:1.7;}
+  .ts{color:var(--text2);margin-right:8px;}
+  .msg-ok{color:var(--green);}
+  .msg-info{color:var(--cyan);}
+  .msg-warn{color:var(--amber);}
+  .msg-err{color:var(--red);}
+
+  .action-row{display:flex;gap:1rem;margin-top:1.2rem;}
+  .btn-connect{flex:2;padding:1rem;background:rgba(0,255,231,.06);border:1.5px solid var(--cyan);border-radius:8px;color:var(--cyan);font-family:var(--main);font-size:17px;font-weight:700;letter-spacing:4px;text-transform:uppercase;cursor:pointer;transition:all .25s;}
+  .btn-connect:hover{background:rgba(0,255,231,.12);box-shadow:var(--glow);}
+  .btn-connect.connected{border-color:var(--pink);color:var(--pink);background:rgba(255,45,120,.06);}
+  .btn-connect.connected:hover{background:rgba(255,45,120,.12);box-shadow:var(--glow-pink);}
+  .btn-connect:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-newcircuit{padding:1rem 1.4rem;background:rgba(255,179,0,.06);border:1px solid rgba(255,179,0,.3);border-radius:8px;color:var(--amber);font-family:var(--main);font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;transition:all .25s;white-space:nowrap;}
+  .btn-newcircuit:hover{background:rgba(255,179,0,.12);}
+  .btn-chrome{flex:1;padding:1rem;background:rgba(66,133,244,.06);border:1px solid rgba(66,133,244,.3);border-radius:8px;color:#4285f4;font-family:var(--main);font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .25s;display:flex;align-items:center;justify-content:center;gap:8px;}
+  .btn-chrome:hover{background:rgba(66,133,244,.12);border-color:#4285f4;}
+  .btn-chrome:disabled{opacity:.4;cursor:not-allowed;}
+  .spinner{display:inline-block;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">GN</div>
+      <div class="logo-text">
+        <h1>GhostNet</h1>
+        <p>TOR + PRIVOXY CONTROL CENTER</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="clock">--:--:--</span>
+      <div class="backend-badge">
+        <span class="backend-dot" id="backend-dot"></span>
+        <span id="backend-label">BACKEND HORS-LIGNE</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="status-grid">
+    <div class="stat-card">
+      <div class="stat-label">Tor Status</div>
+      <div class="stat-value" id="tor-status-val"><span class="dot off"></span>DÉCONNECTÉ</div>
+    </div>
+    <div class="stat-card pink">
+      <div class="stat-label">Privoxy Status</div>
+      <div class="stat-value" id="priv-status-val"><span class="dot off"></span>ARRÊTÉ</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">IP Visible</div>
+      <div class="stat-value c-green" id="stat-ip">---.---</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Uptime Session</div>
+      <div class="stat-value c-amber" id="stat-uptime">00:00:00</div>
+    </div>
+  </div>
+
+  <div class="main-grid">
+
+    <div class="panel">
+      <div class="panel-title">// Contrôles Services</div>
+      <div class="control-row">
+        <div>
+          <div class="control-label">Tor Daemon</div>
+          <div class="control-sub">Port 9050 · SOCKS5</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="tor-toggle" onchange="toggleService('tor',this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="control-row">
+        <div>
+          <div class="control-label">Privoxy Proxy</div>
+          <div class="control-sub">Port 8118 · HTTP</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="priv-toggle" onchange="toggleService('privoxy',this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="control-row">
+        <div>
+          <div class="control-label">Pluggable Transport</div>
+          <div class="control-sub" id="pt-status-sub">FAI peut détecter Tor</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="pt-toggle" onchange="togglePT(this.checked)"><span class="slider"></span></label>
+      </div>
+      <div style="margin-top:1.2rem">
+        <div class="stat-label" style="margin-bottom:.6rem">Circuit Tor actif</div>
+        <div class="circuit-nodes" id="circuit-nodes">
+          <div class="c-node">YOU</div><div class="c-arrow">›</div>
+          <div class="c-node">GUARD</div><div class="c-arrow">›</div>
+          <div class="c-node">RELAY</div><div class="c-arrow">›</div>
+          <div class="c-node">EXIT</div>
+        </div>
+        <div class="uptime-bar"><div class="uptime-fill" id="uptime-fill" style="width:0%"></div></div>
+        <div class="uptime-meta"><span>Stabilité circuit</span><span id="circuit-pct">0%</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">// Surveillance IP</div>
+      <div class="ip-block">
+        <div>
+          <div class="ip-label">IP RÉELLE (FAI)</div>
+          <div class="ip-addr real" id="real-ip">Chargement...</div>
+          <div class="ip-flag" id="real-loc">FR · En cours...</div>
+        </div>
+      </div>
+      <div class="ip-block">
+        <div>
+          <div class="ip-label">IP TOR (NŒUD DE SORTIE)</div>
+          <div class="ip-addr tor" id="tor-ip">En attente...</div>
+          <div class="ip-flag" id="tor-loc">— nœud inactif</div>
+        </div>
+        <button class="refresh-btn" id="btn-newip" onclick="newCircuit()" disabled>↻ NOUVEAU</button>
+      </div>
+      <div class="ip-block" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div class="ip-label">TRANSPORT ACTIF</div>
+        <div style="font-size:15px;font-weight:700;color:var(--text)" id="pt-active-label">Aucun (Tor direct)</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text2)" id="pt-active-desc">Le FAI peut détecter Tor</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">// Pluggable Transports</div>
+      <div class="transport-grid">
+        <button class="transport-btn active" onclick="selectTransport(this,'obfs4')">
+          <span class="tb-name">obfs4</span>
+          <span class="tb-desc">Trafic aléatoire illisible</span>
+          <span class="tb-badge strong">RECOMMANDÉ</span>
+        </button>
+        <button class="transport-btn" onclick="selectTransport(this,'meek-azure')">
+          <span class="tb-name">meek-azure</span>
+          <span class="tb-desc">Imite le trafic Azure</span>
+          <span class="tb-badge strong">EXCELLENT</span>
+        </button>
+        <button class="transport-btn" onclick="selectTransport(this,'snowflake')">
+          <span class="tb-name">snowflake</span>
+          <span class="tb-desc">Proxies WebRTC</span>
+          <span class="tb-badge">BON</span>
+        </button>
+        <button class="transport-btn" onclick="selectTransport(this,'WebTunnel')">
+          <span class="tb-name">WebTunnel</span>
+          <span class="tb-desc">Imite HTTPS natif</span>
+          <span class="tb-badge strong">EXCELLENT</span>
+        </button>
+      </div>
+      <div id="pt-instructions">
+        Dans Tor Browser → Paramètres → Connexion<br>
+        Sélectionne <span style="color:var(--cyan)">obfs4</span> comme bridge intégré<br>
+        Redémarre Tor Browser pour appliquer
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">// Navigateur Chrome</div>
+      <div class="ip-block" style="flex-direction:column;align-items:flex-start;gap:12px">
+        <div>
+          <div class="ip-label">🌐 Chrome avec proxy Tor</div>
+          <div class="proxy-status" id="chrome-status" style="font-family:var(--mono);font-size:10px;margin-top:4px;">
+            ⚠️ Tor et Privoxy doivent être actifs
+          </div>
+        </div>
+        <button class="btn-chrome" id="btn-chrome" onclick="launchChromeWithProxy()" disabled style="width:100%;">
+          🌐 LANCER CHROME AVEC PROXY TOR
+        </button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2);margin-top:4px;">
+          📌 Profil temporaire séparé — ne mélange pas avec ton Chrome normal
+        </div>
+      </div>
+    </div>
+
+    <div class="panel log-panel">
+      <div class="panel-title">// Journal Système</div>
+      <div class="terminal" id="terminal"></div>
+    </div>
+
+  </div>
+
+  <div class="action-row">
+    <button class="btn-connect" id="main-btn" onclick="mainAction()">▶ CONNECTER</button>
+    <button class="btn-newcircuit" onclick="newCircuit()">⟳ NOUVEAU CIRCUIT</button>
+    <button class="btn-chrome" id="chrome-action-btn" onclick="launchChromeWithProxy()" disabled style="background:rgba(66,133,244,.06); border-color:#4285f4; color:#4285f4;">
+      🌐 CHROME TOR
+    </button>
+  </div>
+
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+let backendAlive = false;
+let torOn = false, privoxyOn = false;
+let sessionSecs = 0, uptimeTick = null;
+let logIndex = 0;
+let selectedPT = 'obfs4';
+// FIX : évite d'envoyer le même transport deux fois de suite
+// et debounce les clics rapides (ex: clic bouton + toggle PT en cascade)
+let _lastSentTransport = null;
+let _transportTimer = null;
+
+const ptInstructions = {
+  'obfs4':      `Dans Tor Browser → Paramètres → Connexion<br>Sélectionne <span style="color:var(--cyan)">obfs4</span> comme bridge intégré<br>Redémarre Tor Browser pour appliquer`,
+  'meek-azure': `Dans Tor Browser → Paramètres → Connexion<br>Sélectionne <span style="color:var(--cyan)">meek-azure</span> comme bridge<br>Trafic routé via les serveurs Microsoft`,
+  'snowflake':  `Dans Tor Browser → Paramètres → Connexion<br>Sélectionne <span style="color:var(--cyan)">snowflake</span> comme bridge<br>Utilise des proxies WebRTC éphémères`,
+  'WebTunnel':  `Dans Tor Browser → Paramètres → Connexion<br>Sélectionne <span style="color:var(--cyan)">WebTunnel</span> comme bridge<br>Imite parfaitement du trafic HTTPS normal`,
+};
+
+function tick() {
+  const n = new Date();
+  document.getElementById('clock').textContent =
+    [n.getHours(),n.getMinutes(),n.getSeconds()].map(v=>String(v).padStart(2,'0')).join(':');
+}
+setInterval(tick,1000); tick();
+
+function startUptime() {
+  sessionSecs = 0;
+  clearInterval(uptimeTick);
+  uptimeTick = setInterval(()=>{
+    sessionSecs++;
+    const h=Math.floor(sessionSecs/3600), m=Math.floor((sessionSecs%3600)/60), s=sessionSecs%60;
+    document.getElementById('stat-uptime').textContent =
+      [h,m,s].map(v=>String(v).padStart(2,'0')).join(':');
+    const pct = Math.min(100, Math.floor((sessionSecs/600)*100));
+    document.getElementById('uptime-fill').style.width = pct+'%';
+    document.getElementById('circuit-pct').textContent = pct+'%';
+  },1000);
+}
+function stopUptime() {
+  clearInterval(uptimeTick);
+  document.getElementById('stat-uptime').textContent = '00:00:00';
+  document.getElementById('uptime-fill').style.width = '0%';
+  document.getElementById('circuit-pct').textContent = '0%';
+}
+
+function logLocal(msg, level='info') {
+  const t = document.getElementById('terminal');
+  const n = new Date();
+  const ts = [n.getHours(),n.getMinutes(),n.getSeconds()].map(v=>String(v).padStart(2,'0')).join(':');
+  const validLevels = ['ok','info','warn','err'];
+  const safeLevel = validLevels.includes(level) ? level : 'info';
+  const d = document.createElement('div');
+  d.className = 'log-line';
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'ts';
+  tsSpan.textContent = `[${ts}]`;
+  const msgSpan = document.createElement('span');
+  msgSpan.className = `msg-${safeLevel}`;
+  msgSpan.textContent = msg;
+  d.appendChild(tsSpan);
+  d.appendChild(msgSpan);
+  t.appendChild(d);
+  t.scrollTop = t.scrollHeight;
+}
+
+async function pollLogs() {
+  if (!backendAlive) return;
+  try {
+    const r = await fetch(`${API}/logs?since=${logIndex}`);
+    const {logs} = await r.json();
+    logs.forEach(l => { logLocal(l.msg, l.level); logIndex++; });
+  } catch {}
+}
+
+async function pingBackend() {
+  try {
+    const r = await fetch(`${API}/status`, {signal: AbortSignal.timeout(5000)});
+    const data = await r.json();
+    if (!backendAlive) {
+      backendAlive = true;
+      document.getElementById('backend-dot').classList.add('alive');
+      document.getElementById('backend-label').textContent = 'BACKEND EN LIGNE';
+      logLocal('Backend GhostNet connecté sur port 8000', 'ok');
+      fetchRealIP();
+      // FIX : initialise _lastSentTransport depuis l'état réel du backend
+      // pour éviter un appel inutile au premier clic sur le toggle PT
+      if (data.transport) _lastSentTransport = data.transport;
+    }
+    torOn = data.tor;
+    privoxyOn = data.privoxy;
+    updateTorUI(torOn);
+    updatePrivUI(privoxyOn);
+    document.getElementById('tor-toggle').checked = torOn;
+    document.getElementById('priv-toggle').checked = privoxyOn;
+
+    if (torOn && privoxyOn && !uptimeTick) startUptime();
+    else if ((!torOn || !privoxyOn) && uptimeTick) stopUptime();
+
+    if (data.exit_ip && data.exit_ip !== document.getElementById('tor-ip').textContent) {
+      document.getElementById('tor-ip').textContent = data.exit_ip;
+      document.getElementById('stat-ip').textContent = data.exit_ip.substring(0,12)+'...';
+      if (data.exit_country) document.getElementById('tor-loc').textContent = data.exit_country;
+    }
+    syncMainBtn();
+    updateChromeButton();
+  } catch {
+    if (backendAlive) {
+      backendAlive = false;
+      document.getElementById('backend-dot').classList.remove('alive');
+      document.getElementById('backend-label').textContent = 'BACKEND HORS-LIGNE';
+      logLocal('Backend déconnecté — lance backend.py', 'err');
+    }
+  }
+}
+
+async function fetchRealIP() {
+  try {
+    const r = await fetch(`${API}/ip/real`);
+    const d = await r.json();
+    document.getElementById('real-ip').textContent = d.ip;
+    document.getElementById('real-loc').textContent = `${d.country} · ${d.org}`;
+  } catch {
+    document.getElementById('real-ip').textContent = 'Non disponible';
+  }
+}
+
+async function fetchTorIP() {
+  document.getElementById('tor-ip').textContent = '...';
+  try {
+    const r = await fetch(`${API}/ip/tor`);
+    const d = await r.json();
+    document.getElementById('tor-ip').textContent = d.ip;
+    document.getElementById('tor-loc').textContent = `${d.country} · ${d.city} · ${d.org}`;
+    document.getElementById('stat-ip').textContent = d.ip.substring(0,12)+'...';
+    updateCircuit(d.country);
+  } catch {
+    document.getElementById('tor-ip').textContent = 'Erreur';
+  }
+}
+
+function updateCircuit(exitCountry) {
+  document.getElementById('circuit-nodes').innerHTML = `
+    <div class="c-node active">YOU</div><div class="c-arrow">›</div>
+    <div class="c-node active" style="font-size:9px">GUARD</div><div class="c-arrow">›</div>
+    <div class="c-node active" style="font-size:9px">RELAY</div><div class="c-arrow">›</div>
+    <div class="c-node active" style="font-size:9px">${exitCountry||'EXIT'}</div>
+  `;
+}
+
+async function toggleService(svc, on) {
+  if (!backendAlive) {
+    logLocal('Backend non disponible — lance backend.py', 'err');
+    document.getElementById(`${svc==='tor'?'tor':'priv'}-toggle`).checked = !on;
+    return;
+  }
+  const ep = `${API}/${svc}/${on?'start':'stop'}`;
+  try {
+    const r = await fetch(ep, {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) logLocal(d.msg, 'err');
+    else if (on && svc==='tor') setTimeout(fetchTorIP, 3000);
+  } catch(e) {
+    logLocal(`Erreur API : ${e.message}`, 'err');
+  }
+}
+
+function updateTorUI(on) {
+  const v = document.getElementById('tor-status-val');
+  v.innerHTML = `<span class="dot ${on?'on':'off'}"></span>${on?'CONNECTÉ':'DÉCONNECTÉ'}`;
+  if (!on) { document.getElementById('tor-ip').textContent='En attente...'; document.getElementById('tor-loc').textContent='— nœud inactif'; }
+  document.getElementById('btn-newip').disabled = !on;
+}
+function updatePrivUI(on) {
+  const v = document.getElementById('priv-status-val');
+  v.innerHTML = `<span class="dot ${on?'on':'off'}"></span>${on?'ACTIF':'ARRÊTÉ'}`;
+}
+
+function updateChromeButton() {
+  const canLaunch = torOn && privoxyOn && backendAlive;
+  const btns = [document.getElementById('btn-chrome'), document.getElementById('chrome-action-btn')];
+  btns.forEach(btn => {
+    if (btn) btn.disabled = !canLaunch;
+  });
+  const statusEl = document.getElementById('chrome-status');
+  if (statusEl) {
+    if (canLaunch) {
+      statusEl.innerHTML = '✅ Tor + Privoxy actifs — Chrome prêt à lancer';
+      statusEl.style.color = 'var(--green)';
+    } else {
+      statusEl.innerHTML = '⚠️ Tor et Privoxy doivent être actifs pour lancer Chrome';
+      statusEl.style.color = 'var(--text2)';
+    }
+  }
+}
+
+async function launchChromeWithProxy() {
+  if (!torOn || !privoxyOn) {
+    logLocal('Tor et Privoxy doivent être actifs avant de lancer Chrome', 'warn');
+    return;
+  }
+  
+  logLocal('Lancement de Chrome avec proxy Tor via API...', 'info');
+  
+  try {
+    const response = await fetch(`${API}/chrome/launch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (result.ok) {
+      logLocal(`✅ Chrome lancé avec succès`, 'ok');
+      logLocal(`📁 Profil temporaire: ${result.profile}`, 'info');
+    } else {
+      logLocal(`❌ Erreur: ${result.msg}`, 'err');
+    }
+  } catch (err) {
+    logLocal(`Erreur de connexion: ${err.message}`, 'err');
+  }
+}
+
+async function togglePT(on) {
+  const transport = on ? selectedPT : 'direct';
+
+  // FIX : mise à jour UI immédiate (pas besoin d'attendre l'API)
+  if (on) {
+    document.getElementById('pt-active-label').textContent = selectedPT;
+    document.getElementById('pt-active-desc').textContent = 'Trafic Tor masqué au FAI';
+    document.getElementById('pt-active-desc').style.color = 'var(--green)';
+    document.getElementById('pt-status-sub').textContent = selectedPT + ' · actif';
+  } else {
+    document.getElementById('pt-active-label').textContent = 'Aucun (Tor direct)';
+    document.getElementById('pt-active-desc').textContent = 'Le FAI peut détecter Tor';
+    document.getElementById('pt-active-desc').style.color = '';
+    document.getElementById('pt-status-sub').textContent = 'FAI peut détecter Tor';
+  }
+
+  if (!backendAlive) return;
+
+  // FIX : debounce 250ms — si l'utilisateur clique vite sur plusieurs boutons,
+  // on n'envoie que le dernier état (évite la cascade obfs4→direct→obfs4)
+  clearTimeout(_transportTimer);
+  _transportTimer = setTimeout(async () => {
+    // FIX : dédoublonnage — skip si le transport n'a pas changé
+    if (transport === _lastSentTransport) return;
+    _lastSentTransport = transport;
+    await fetch(`${API}/transport/${transport}`, {method:'POST'}).catch(()=>{});
+  }, 250);
+}
+
+function selectTransport(btn, name) {
+  document.querySelectorAll('.transport-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const changed = name !== selectedPT;
+  selectedPT = name;
+  document.getElementById('pt-instructions').innerHTML = ptInstructions[name]||'';
+  // FIX : n'appelle togglePT que si le transport a réellement changé ET que le toggle est actif
+  if (changed && document.getElementById('pt-toggle').checked) togglePT(true);
+}
+
+function syncMainBtn() {
+  const btn = document.getElementById('main-btn');
+  if (torOn && privoxyOn) {
+    btn.textContent = '■ DÉCONNECTER';
+    btn.classList.add('connected');
+  } else {
+    btn.textContent = '▶ CONNECTER';
+    btn.classList.remove('connected');
+  }
+}
+
+async function mainAction() {
+  if (!backendAlive) { logLocal('Lance d\'abord installer.bat ou backend.py !', 'err'); return; }
+  const allOn = torOn && privoxyOn;
+  const btn = document.getElementById('main-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner">⟳</span> EN COURS...';
+  if (!allOn) {
+    await fetch(`${API}/tor/start`,{method:'POST'}).catch(()=>{});
+    await new Promise(r=>setTimeout(r,800));
+    await fetch(`${API}/privoxy/start`,{method:'POST'}).catch(()=>{});
+    await new Promise(r=>setTimeout(r,500));
+    startUptime();
+    setTimeout(fetchTorIP, 3000);
+  } else {
+    await fetch(`${API}/tor/stop`,{method:'POST'}).catch(()=>{});
+    await fetch(`${API}/privoxy/stop`,{method:'POST'}).catch(()=>{});
+    stopUptime();
+  }
+  btn.disabled = false;
+}
+
+async function newCircuit() {
+  if (!backendAlive || !torOn) { logLocal('Tor non actif', 'warn'); return; }
+  await fetch(`${API}/circuit/new`,{method:'POST'}).catch(()=>{});
+  setTimeout(fetchTorIP, 2500);
+}
+
+logLocal('GhostNet Dashboard chargé — connexion au backend...','info');
+setInterval(pingBackend, 3000);
+setInterval(pollLogs, 2000);
+pingBackend();
+</script>
+</body>
+</html>
