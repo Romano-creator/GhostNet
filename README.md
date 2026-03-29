@@ -69,6 +69,8 @@ venv\Scripts\python backend_v2.py
 
 Puis ouvre **http://localhost:8000** dans ton navigateur.
 
+Désactiver Pluggable Transport si probléme de connetion à tor et modifier le fichier torrc avec les nouveuax pond https://bridges.torproject.org/options
+
 ### Déplacer le projet
 
 Si tu déplaces le dossier GhostNet vers un autre emplacement :

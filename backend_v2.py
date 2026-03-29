@@ -69,11 +69,20 @@ state = {
     "exit_org":      None,
     "transport":     "direct",
     "logs":          [],
+    # Bande passante (mise à jour par BandwidthMonitor)
+    "bw_down":       0,   # octets/s download (dernier event)
+    "bw_up":         0,   # octets/s upload   (dernier event)
+    "bw_total_down": 0,   # total session download
+    "bw_total_up":   0,   # total session upload
 }
 
 _last_newnym: float = 0.0
 _NEWNYM_COOLDOWN = 10.0
 _fetching_tor_ip = False
+_flags_lock = threading.Lock()   # protège _fetching_tor_ip et _tor_starting
+# Auto-rotation
+_autorotate_task: asyncio.Task | None = None
+_autorotate_interval: int = 0  # 0 = désactivé, sinon secondes entre chaque NEWNYM
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
 def log(msg: str, level: str = "info") -> None:
@@ -188,25 +197,51 @@ _GEO_SERVICES = [
             "country": d.get("country", "?"),
             "city":    d.get("city", "?"),
             "org":     d.get("org", "?"),
-        } if d.get("status") == "success" else (_ for _ in ()).throw(ValueError(d.get("message","ip-api error"))),
+        } if d.get("status") == "success" else (_ for _ in ()).throw(ValueError(d.get("message", "ip-api error"))),
     ),
 ]
 
+# Timeout par service (secondes) — réduit pour ne pas bloquer trop longtemps
+_GEO_TIMEOUT = 8
+
+def _fetch_one_geo(url: str, parser, sess: requests.Session) -> dict | None:
+    """Tente un seul service géo. Retourne None en cas d'échec."""
+    try:
+        resp = sess.get(url, timeout=_GEO_TIMEOUT)
+        data = resp.json()
+        result = parser(data)
+        if result.get("ip") and result["ip"] != "Erreur":
+            return result
+    except Exception:
+        pass
+    return None
+
 def fetch_ip(via_tor: bool = False) -> dict:
+    """
+    Interroge tous les services géo EN PARALLÈLE et retourne le premier
+    qui répond. Timeout global = _GEO_TIMEOUT + 1s.
+    Évite d'attendre 4×timeout en cas de nœud de sortie lent.
+    """
+    import concurrent.futures
     sess = proxied_session() if via_tor else requests.Session()
-    last_err = "Tous les services ont échoué"
-    for url, parser in _GEO_SERVICES:
-        try:
-            resp = sess.get(url, timeout=12)
-            data = resp.json()
-            result = parser(data)
-            if result.get("ip") and result["ip"] != "Erreur":
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(_GEO_SERVICES)) as pool:
+        futures = {
+            pool.submit(_fetch_one_geo, url, parser, sess): url.split("/")[2]
+            for url, parser in _GEO_SERVICES
+        }
+        for future in concurrent.futures.as_completed(
+            futures, timeout=_GEO_TIMEOUT + 1
+        ):
+            result = future.result()
+            if result is not None:
+                # Annule les autres requêtes en cours (best-effort)
+                for f in futures:
+                    f.cancel()
                 return result
-        except Exception as e:
-            last_err = str(e)
-            log(f"fetch_ip fallback ({url.split('/')[2]}) : {e}", "warn")
-            continue
-    return {"ip": "Erreur", "country": "?", "city": "?", "org": last_err}
+
+    log("fetch_ip : tous les services géo ont échoué ou timeout", "warn")
+    return {"ip": "Erreur", "country": "?", "city": "?", "org": "Tous les services ont timeout"}
 
 def _kill_proc(proc: subprocess.Popen | None, name: str) -> None:
     if proc is None:
@@ -295,10 +330,11 @@ _tor_starting = False
 
 def _fetch_tor_ip_safe() -> None:
     global _fetching_tor_ip
-    if _fetching_tor_ip:
-        log("fetch_ip Tor déjà en cours — ignoré", "info")
-        return
-    _fetching_tor_ip = True
+    with _flags_lock:
+        if _fetching_tor_ip:
+            log("fetch_ip Tor déjà en cours — ignoré", "info")
+            return
+        _fetching_tor_ip = True
     try:
         d = fetch_ip(True)
         with state_lock:
@@ -307,11 +343,12 @@ def _fetch_tor_ip_safe() -> None:
             state["exit_city"]    = d.get("city", "?")
             state["exit_org"]     = d.get("org", "?")
         if d["ip"] != "Erreur":
-            log(f"Nœud de sortie : {d['ip']} — {d['city']}, {d['country']}", "ok")
+            log(f"Nœud de sortie : {d['ip']} — {d.get('city','?')}, {d['country']}", "ok")
         else:
-            log(f"fetch_ip Tor échoué : {d['org']}", "warn")
+            log(f"IP nœud de sortie indisponible — {d['org']}", "warn")
     finally:
-        _fetching_tor_ip = False
+        with _flags_lock:
+            _fetching_tor_ip = False
 
 @app.post("/tor/start")
 async def tor_start():
@@ -356,6 +393,7 @@ async def tor_start():
                 await asyncio.sleep(8)
             loop = asyncio.get_event_loop()
             loop.run_in_executor(None, _fetch_tor_ip_safe)
+            bw_monitor.start()   # ← démarre la lecture bande passante
             _tor_starting = False
             return {"ok": True, "msg": "Tor démarré"}
         else:
@@ -370,11 +408,21 @@ async def tor_start():
 
 @app.post("/tor/stop")
 def tor_stop():
+    global _autorotate_task, _autorotate_interval
+    bw_monitor.stop()
+    if _autorotate_task and not _autorotate_task.done():
+        _autorotate_task.cancel()
+    _autorotate_task = None
+    _autorotate_interval = 0
     with state_lock:
         proc = state.pop("tor_proc", None)
         state["tor_proc"]      = None
         state["session_start"] = None
         state["exit_ip"]       = None
+        state["bw_down"]       = 0
+        state["bw_up"]         = 0
+        state["bw_total_down"] = 0
+        state["bw_total_up"]   = 0
     _kill_proc(proc, "Tor")
     return {"ok": True}
 
@@ -518,14 +566,120 @@ async def launch_chrome():
         )
 
 # ── BRIDGES ──────────────────────────────────────────────────────────────────
-BRIDGES: dict[str, list[str]] = {
+# Bridges de secours — utilisés si le fetch en ligne échoue
+_FALLBACK_BRIDGES: dict[str, list[str]] = {
     "obfs4": [
-        "obfs4 76.70.53.5:9856 B7A1DCB550B0C4EFB21932F9A92D56CD7A77502B cert=7SEwtm0wHlE7MCgLa95X8rPrzzW1QJRg4cpXh2c63kf4lJ5h4hVoNkk2J/z1qUiT+jFfEA iat-mode=0",
-        "obfs4 76.70.53.139:9856 B7A1DCB550B0C4EFB21932F9A92D56CD7A77502B cert=7SEwtm0wHlE7MCgLa95X8rPrzzW1QJRg4cpXh2c63kf4lJ5h4hVoNkk2J/z1qUiT+jFfEA iat-mode=0",
-        "obfs4 [2a0a:4587:2012:1::251]:11251 BDE1BBC62DB8EBAE17EEF369A7271512C8B29D0F cert=uG0DsVlVpmb11kIU6HoKsOphEkdpWYfoAnxUh0Z9AGL7kDVxgLTquKS5VUWaS/tijZykJA iat-mode=0",
-        "obfs4 [2003:d0:af44:c100:be24:11ff:fe1b:dfd2]:512 B2C717B2D1CF4E6F3D05E998C936EAEC4E7DC706 cert=xQ1KEMVmT8XZQHF3X2qZpfJic2di8SAiblx1fwLh1l9kw/RNI+wnxILgAy7zcQ2Mbl95UA iat-mode=0",
+        "obfs4 [2a04:dd00:26:9:216:3cff:fe7c:a50e]:31337 E315A7F8A5E2C1B4819D09D79C5A627D65C182AB cert=uFpKPZe/wmdL4o+mGABkhUSh33w457bfY3r+D93o0bzda+NpdAkkr87dUkzihagV61WIOA iat-mode=0",
+        "obfs4 [2a04:dd01:19:81:195:242:99:71]:31337 E315A7F8A5E2C1B4819D09D79C5A627D65C182AB cert=uFpKPZe/wmdL4o+mGABkhUSh33w457bfY3r+D93o0bzda+NpdAkkr87dUkzihagV61WIOA iat-mode=0",
     ],
 }
+
+BRIDGES: dict[str, list[str]] = dict(_FALLBACK_BRIDGES)  # sera mis à jour au démarrage
+
+# Sources pour récupérer des bridges obfs4 frais
+# Chaque source est un (url, parser) — parser reçoit le texte brut et retourne une liste de strings "obfs4 ..."
+_BRIDGE_SOURCES = [
+    # API bridges.torproject.org — retourne des bridges directement
+    (
+        "https://bridges.torproject.org/bridges?transport=obfs4",
+        lambda text: [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().startswith("obfs4 ")
+        ],
+    ),
+    # Collecteur communautaire de bridges Tor (mis à jour régulièrement)
+    (
+        "https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/obfs4",
+        lambda text: [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().startswith("obfs4 ")
+        ],
+    ),
+]
+
+
+def fetch_bridges_online() -> dict[str, list[str]]:
+    """
+    Tente de récupérer des bridges obfs4 frais depuis les sources officielles Tor.
+    Retourne un dict compatible avec BRIDGES, ou un dict vide si tout échoue.
+    """
+    import concurrent.futures
+
+    results: list[str] = []
+
+    def _try_source(url: str, parser) -> list[str]:
+        try:
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "GhostNet/2.1"})
+            resp.raise_for_status()
+            parsed = parser(resp.text)
+            if parsed:
+                log(f"Bridges récupérés depuis {url.split('/')[2]} : {len(parsed)} bridge(s)", "ok")
+            return parsed
+        except Exception as e:
+            log(f"Source bridges {url.split('/')[2]} inaccessible : {e}", "warn")
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(_BRIDGE_SOURCES)) as pool:
+        futures = [pool.submit(_try_source, url, parser) for url, parser in _BRIDGE_SOURCES]
+        for future in concurrent.futures.as_completed(futures, timeout=12):
+            bridges = future.result()
+            for b in bridges:
+                if b not in results:
+                    results.append(b)
+
+    if results:
+        return {"obfs4": results}
+    return {}
+
+
+def refresh_bridges() -> bool:
+    """
+    Met à jour BRIDGES avec des bridges frais.
+    Retourne True si au moins un nouveau bridge a été trouvé.
+    """
+    global BRIDGES
+    log("Recherche de bridges obfs4 frais...", "info")
+    fresh = fetch_bridges_online()
+    if fresh.get("obfs4"):
+        BRIDGES = fresh
+        log(f"BRIDGES mis à jour : {len(fresh['obfs4'])} bridge(s) obfs4 actifs", "ok")
+        return True
+    else:
+        log("Aucun bridge frais trouvé — bridges de secours conservés", "warn")
+        BRIDGES = dict(_FALLBACK_BRIDGES)
+        return False
+
+
+@app.post("/bridges/refresh")
+async def api_bridges_refresh():
+    """Relance le fetch des bridges depuis les sources Tor. Utile si les bridges ne fonctionnent plus."""
+    loop = asyncio.get_event_loop()
+    success = await loop.run_in_executor(None, refresh_bridges)
+    with state_lock:
+        transport = state["transport"]
+    # Si un transport pluggable est actif, réécrit le torrc avec les nouveaux bridges
+    if success and transport != "direct" and transport in BRIDGES and TOR_RC.exists():
+        rc = TOR_RC.read_text(encoding="utf-8")
+        rc = _torrc_set_bridges(rc, BRIDGES[transport], use_bridges=True)
+        TOR_RC.write_text(rc, encoding="utf-8")
+        log("torrc mis à jour avec les nouveaux bridges", "ok")
+    return {
+        "ok": success,
+        "bridges": BRIDGES.get("obfs4", []),
+        "count": len(BRIDGES.get("obfs4", [])),
+        "msg": f"{len(BRIDGES.get('obfs4', []))} bridge(s) disponibles",
+    }
+
+
+@app.get("/bridges/list")
+def api_bridges_list():
+    """Retourne les bridges actuellement en mémoire."""
+    return {
+        "bridges": BRIDGES,
+        "source": "live" if BRIDGES != _FALLBACK_BRIDGES else "fallback",
+    }
 
 @app.post("/transport/{name}")
 def set_transport(name: str):
@@ -568,12 +722,159 @@ def _torrc_set(content: str, key: str, value: str) -> str:
 
 def _torrc_set_bridges(content: str, bridges: list[str], use_bridges: bool) -> str:
     import re
-    content = re.sub(r"^#?\s*Bridge\s+.*$", "", content, flags=re.MULTILINE)
+    # Supprime les lignes "Bridge obfs4 ..." ET les lignes "obfs4 ..." sans préfixe
+    content = re.sub(r"^#?\s*(?:Bridge\s+)?(?:obfs4|meek|snowflake|webtunnel)\s+.*$", "", content, flags=re.MULTILINE | re.IGNORECASE)
     content = _torrc_set(content, "UseBridges", "1" if use_bridges else "0")
     content = re.sub(r"\n{3,}", "\n\n", content).rstrip() + "\n"
     if use_bridges and bridges:
         content += "\n" + "\n".join(f"Bridge {b}" for b in bridges) + "\n"
     return content
+
+# ── BANDWIDTH MONITOR ────────────────────────────────────────────────────────
+
+class BandwidthMonitor:
+    """
+    Maintient une connexion persistante au Control Port Tor et lit les events
+    '650 BW <down> <up>' en temps réel pour alimenter state["bw_*"].
+    Se reconnecte automatiquement si la connexion est perdue.
+    """
+    def __init__(self):
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="bw-monitor")
+        self._thread.start()
+        log("BandwidthMonitor démarré", "info")
+
+    def stop(self):
+        self._stop_event.set()
+        # Remet les stats à zéro
+        with state_lock:
+            state["bw_down"] = 0
+            state["bw_up"]   = 0
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            if not port_open(TOR_CONTROL_PORT):
+                self._stop_event.wait(2)
+                continue
+            cookie = read_cookie()
+            if cookie is None:
+                self._stop_event.wait(2)
+                continue
+            try:
+                self._monitor_loop(cookie)
+            except Exception as e:
+                if not self._stop_event.is_set():
+                    log(f"BandwidthMonitor reconnexion dans 3s : {e}", "warn")
+                    self._stop_event.wait(3)
+
+    def _monitor_loop(self, cookie: bytes):
+        cookie_hex = cookie.hex()
+        with socket.create_connection(("127.0.0.1", TOR_CONTROL_PORT), timeout=5) as s:
+            s.sendall(f"AUTHENTICATE {cookie_hex}\r\nSETEVENTS BANDWIDTH\r\n".encode())
+            s.settimeout(5)
+            buf = ""
+            while not self._stop_event.is_set():
+                try:
+                    chunk = s.recv(4096).decode("utf-8", errors="replace")
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    # Format : "650 BW <bytes_read> <bytes_written>"
+                    if line.startswith("650 BW "):
+                        parts = line.split()
+                        if len(parts) == 4:
+                            try:
+                                bw_down = int(parts[2])
+                                bw_up   = int(parts[3])
+                                with state_lock:
+                                    state["bw_down"]       = bw_down
+                                    state["bw_up"]         = bw_up
+                                    state["bw_total_down"] += bw_down
+                                    state["bw_total_up"]   += bw_up
+                            except ValueError:
+                                pass
+
+bw_monitor = BandwidthMonitor()
+
+# ── AUTO-ROTATION ─────────────────────────────────────────────────────────────
+
+async def _autorotate_loop(interval_sec: int):
+    """Envoie NEWNYM toutes les interval_sec secondes tant que Tor est actif."""
+    global _last_newnym
+    log(f"Auto-rotation activée — nouveau circuit toutes les {interval_sec}s", "ok")
+    while True:
+        await asyncio.sleep(interval_sec)
+        if not port_open(TOR_SOCKS_PORT):
+            log("Auto-rotation : Tor non actif — pause", "warn")
+            continue
+        log("Auto-rotation : nouveau circuit...", "info")
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(None, tor_newnym)
+        if success:
+            _last_newnym = time.time()
+            await asyncio.sleep(5)
+            loop.run_in_executor(None, _fetch_tor_ip_safe)
+
+@app.post("/autorotate/start")
+async def autorotate_start(interval: int = 300):
+    """
+    Active l'auto-rotation des circuits.
+    interval : secondes entre chaque NEWNYM (min 30, max 3600)
+    """
+    global _autorotate_task, _autorotate_interval
+    interval = max(30, min(3600, interval))
+
+    if _autorotate_task and not _autorotate_task.done():
+        _autorotate_task.cancel()
+
+    _autorotate_interval = interval
+    _autorotate_task = asyncio.get_event_loop().create_task(
+        _autorotate_loop(interval)
+    )
+    return {"ok": True, "interval": interval,
+            "msg": f"Auto-rotation activée — circuit toutes les {interval}s"}
+
+@app.post("/autorotate/stop")
+async def autorotate_stop():
+    global _autorotate_task, _autorotate_interval
+    if _autorotate_task and not _autorotate_task.done():
+        _autorotate_task.cancel()
+    _autorotate_task = None
+    _autorotate_interval = 0
+    log("Auto-rotation désactivée", "warn")
+    return {"ok": True}
+
+@app.get("/autorotate/status")
+def autorotate_status():
+    active = bool(_autorotate_task and not _autorotate_task.done())
+    remaining = 0
+    if active and _last_newnym > 0:
+        elapsed  = time.time() - _last_newnym
+        remaining = max(0, int(_autorotate_interval - elapsed))
+    return {
+        "active":   active,
+        "interval": _autorotate_interval,
+        "remaining": remaining,   # secondes avant le prochain NEWNYM
+    }
+
+@app.get("/bandwidth")
+def bandwidth():
+    with state_lock:
+        return {
+            "down":       state["bw_down"],
+            "up":         state["bw_up"],
+            "total_down": state["bw_total_down"],
+            "total_up":   state["bw_total_up"],
+        }
 
 # ── AUTO-CORRECTION DES CHEMINS ──────────────────────────────────────────────
 
@@ -650,4 +951,6 @@ if __name__ == "__main__":
         log("privoxy.exe manquant — lance setup.py d'abord !", "err")
     # FIX : corrige automatiquement les chemins absolus si le dossier a été déplacé
     _fix_config_paths()
+    # Fetch bridges frais au démarrage (en arrière-plan pour ne pas bloquer)
+    threading.Thread(target=refresh_bridges, daemon=True, name="bridge-refresh").start()
     uvicorn.run(app, host="127.0.0.1", port=BACKEND_PORT, log_level="warning")
