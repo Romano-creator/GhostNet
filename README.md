@@ -69,7 +69,7 @@ venv\Scripts\python backend_v2.py
 
 Puis ouvre **http://localhost:8000** dans ton navigateur.
 
-Désactiver Pluggable Transport si probléme de connetion à tor et modifier le fichier torrc avec les nouveuax pond https://bridges.torproject.org/options
+Désactiver Pluggable Transport si probléme de connetion à tor et modifier le fichier torrc avec les nouveaux pont https://bridges.torproject.org/options
 
 ### Déplacer le projet
 
